@@ -1,0 +1,19 @@
+imapclient==2.3.1
+stripe==7.0.0
+python-dotenv==1.0.0
+requests==2.31.0
+textual==0.52.1
+rich==13.7.0
+validators==0.22.0
+anthropic==0.17.0
+cryptography==42.0.5
+pyjwt==2.8.0
+bcrypt==4.1.2
+redis==5.0.1
+pydantic==2.6.3
+jsonschema==4.21.1
+charset-normalizer==3.3.2
+certifi==2024.2.2
+idna==3.6
+urllib3==2.2.1
+psutil==5.9.8  # Added for system monitoring

@@ -1,0 +1,42 @@
+name: Package Project
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4  # Updated to latest version
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5  # Updated to latest version
+      with:
+        python-version: '3.11'
+    
+    - name: Create version file
+      run: |
+        echo "$(date +'%Y%m%d')-$(git rev-parse --short HEAD)" > version.txt
+    
+    - name: Install zip utility (ensure availability)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y zip
+    
+    - name: Create project package
+      run: |
+        # Create a clean zip of the entire project, excluding unnecessary files
+        zip -r hunchbank-project.zip . -x "*.git*" "*.github*" "*.gitignore" "*.DS_Store"
+    
+    - name: Upload artifact with version
+      uses: actions/upload-artifact@v4  # Updated to latest version
+      with:
+        name: hunchbank-project-${{ github.sha }}  # Adds commit SHA to artifact name for uniqueness
+        path: hunchbank-project.zip
+        retention-days: 30  # Optional: Keeps artifact for 30 days (default is 90)
