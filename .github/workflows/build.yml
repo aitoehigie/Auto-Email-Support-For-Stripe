@@ -13,30 +13,41 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4  # Updated to latest version
+      uses: actions/checkout@v4
     
     - name: Set up Python
-      uses: actions/setup-python@v5  # Updated to latest version
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
     - name: Create version file
       run: |
         echo "$(date +'%Y%m%d')-$(git rev-parse --short HEAD)" > version.txt
+        echo "VERSION=$(cat version.txt)" >> $GITHUB_ENV  # Store version for later
     
-    - name: Install zip utility (ensure availability)
+    - name: Install zip utility
       run: |
         sudo apt-get update
         sudo apt-get install -y zip
     
     - name: Create project package
       run: |
-        # Create a clean zip of the entire project, excluding unnecessary files
-        zip -r hunchbank-project.zip . -x "*.git*" "*.github*" "*.gitignore" "*.DS_Store"
+        zip -r hunchbank-project-${{ env.VERSION }}.zip . -x "*.git*" "*.github*" "*.gitignore" "*.DS_Store"
     
-    - name: Upload artifact with version
-      uses: actions/upload-artifact@v4  # Updated to latest version
+    - name: Create Release and Upload Artifact
+      uses: softprops/action-gh-release@v2
       with:
-        name: hunchbank-project-${{ github.sha }}  # Adds commit SHA to artifact name for uniqueness
-        path: hunchbank-project.zip
-        retention-days: 30  # Optional: Keeps artifact for 30 days (default is 90)
+        tag_name: "latest"  # Always use "latest" tag
+        name: "Latest Build"
+        body: "Auto-generated build from ${{ github.sha }} on ${{ github.event.head_commit.message }}"
+        files: hunchbank-project-${{ env.VERSION }}.zip
+        overwrite: true  # Overwrite the "latest" tag on each push
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Upload artifact (optional fallback)
+      uses: actions/upload-artifact@v4
+      with:
+        name: hunchbank-project-${{ github.sha }}
+        path: hunchbank-project-${{ env.VERSION }}.zip
+        retention-days: 30
