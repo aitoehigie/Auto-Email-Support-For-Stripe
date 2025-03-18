@@ -10,6 +10,8 @@ on:
 jobs:
   package:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Grants permission to create/update releases
     
     steps:
     - name: Checkout code
@@ -23,7 +25,7 @@ jobs:
     - name: Create version file
       run: |
         echo "$(date +'%Y%m%d')-$(git rev-parse --short HEAD)" > version.txt
-        echo "VERSION=$(cat version.txt)" >> $GITHUB_ENV  # Store version for later
+        echo "VERSION=$(cat version.txt)" >> $GITHUB_ENV
     
     - name: Install zip utility
       run: |
@@ -34,14 +36,23 @@ jobs:
       run: |
         zip -r hunchbank-project-${{ env.VERSION }}.zip . -x "*.git*" "*.github*" "*.gitignore" "*.DS_Store"
     
+    - name: Delete existing 'latest' release if it exists
+      run: |
+        # Get the release ID for 'latest' tag, if it exists
+        RELEASE_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          https://api.github.com/repos/${{ github.repository }}/releases/tags/latest | jq -r '.id // ""')
+        if [ -n "$RELEASE_ID" ]; then
+          curl -s -X DELETE -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID
+        fi
+    
     - name: Create Release and Upload Artifact
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: "latest"  # Always use "latest" tag
+        tag_name: "latest"
         name: "Latest Build"
         body: "Auto-generated build from ${{ github.sha }} on ${{ github.event.head_commit.message }}"
         files: hunchbank-project-${{ env.VERSION }}.zip
-        overwrite: true  # Overwrite the "latest" tag on each push
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     
