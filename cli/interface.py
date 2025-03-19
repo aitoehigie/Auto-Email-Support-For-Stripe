@@ -1061,7 +1061,7 @@ class HelpScreen(Screen):
         - `t`: View system status
         
         ## Support
-        For assistance, contact the development team at support@hunchbank.example.com
+        For assistance, contact the development team at support@hunchbank.com
         """
         
         yield Container(
@@ -1727,18 +1727,7 @@ class PaymentUpdateCLI(App):
             
         # Initialize default values for reactive properties
         self.processed_count = 0
-        self.pending_reviews = [
-            {
-                "email": {
-                    "from": "customer@example.com",
-                    "subject": "Payment Update Request",
-                    "body": "I need to update my payment information."
-                },
-                "intent": "update_payment_method",
-                "confidence": 0.95,
-                "entities": {}
-            }
-        ]
+        self.pending_reviews = []
         self.auto_processed = 5
         self.error_count = 0
         self.uptime_seconds = 0
@@ -1763,15 +1752,15 @@ class PaymentUpdateCLI(App):
                 yield Label("System Overview", classes="section-header")
                 with Grid(id="stats-grid"):
                     # Top row - Process metrics
-                    yield StatsCard("Emails Processed", "12", "📧", id="processed-card") 
-                    yield StatsCard("Pending Review", "3", "⏳", id="pending-card")
-                    yield StatsCard("Auto-Processed", "8", "🤖", id="auto-card")
-                    yield StatsCard("Response Time", "1.2s", "⚡", id="response-card")
+                    yield StatsCard("Emails Processed", "0", "📧", id="processed-card") 
+                    yield StatsCard("Pending Review", "0", "⏳", id="pending-card")
+                    yield StatsCard("Auto-Processed", "0", "🤖", id="auto-card")
+                    yield StatsCard("Response Time", "0.0s", "⚡", id="response-card")
                     
                     # Bottom row - System health metrics
-                    yield StatsCard("Error Rate", "0.5%", "📊", id="error-rate-card")
-                    yield StatsCard("Uptime", "24h 12m", "⏱️", id="uptime-card")
-                    yield StatsCard("System Load", "32%", "🖥️", id="load-card")
+                    yield StatsCard("Error Rate", "0.0%", "📊", id="error-rate-card")
+                    yield StatsCard("Uptime", "0h 0m", "⏱️", id="uptime-card")
+                    yield StatsCard("System Load", "0%", "🖥️", id="load-card")
                     yield StatsCard("Service Health", "100%", "✅", id="health-card")
                 
                 # Recent Activity Summary
@@ -1786,12 +1775,7 @@ class PaymentUpdateCLI(App):
                     with Container(id="activity-container", classes="summary-panel"):
                         yield Label("Latest Activities", classes="panel-header")
                         with Container(id="activity-list"):
-                            # Activity items with timestamp, type and status icons
-                            yield Static("🕒 10:45 - Email processed: Payment update request ✅", classes="activity-item")
-                            yield Static("🕒 10:32 - Stripe API request: Update card ✅", classes="activity-item")
-                            yield Static("🕒 10:30 - Human review completed: Refund request ✅", classes="activity-item")
-                            yield Static("🕒 10:22 - Automatically processed: Billing inquiry ✅", classes="activity-item")
-                            yield Static("🕒 10:15 - Email received: Payment details update ⏳", classes="activity-item")
+                            # Activity items will be populated dynamically
                 
                 # System Log
                 with Container(id="log-container", classes="tab-container"):
@@ -1979,10 +1963,7 @@ class PaymentUpdateCLI(App):
             table = self.query_one("#review-table", DataTable)
             table.add_columns("ID", "From", "Subject", "Intent", "Confidence")
             
-            # Add dummy rows to ensure visibility
-            table.add_row("1", "customer@example.com", "Payment Update", "update_payment", "0.95")
-            table.add_row("2", "user@example.com", "Billing Question", "billing_inquiry", "0.88")
-            table.add_row("3", "client@example.com", "Cancel Subscription", "subscription_cancel", "0.92")
+            # Table will be populated with actual review data from incoming requests
         except Exception as e:
             print(f"Table initialization error: {e}")
         
@@ -2094,53 +2075,38 @@ class PaymentUpdateCLI(App):
                     # Current time for activity timestamps
                     current_time = datetime.datetime.now()
                     
-                    # Generate some realistic activities based on actual system state
+                    # Get system activity log from the shared activity log list
+                    # This list should be updated by various operations across the system
                     activities = []
                     
-                    # Most recent activity
-                    minute_offset = 0
-                    activities.append((
-                        current_time - datetime.timedelta(minutes=minute_offset),
+                    # Try to get the activities list from the system activity log if available
+                    if hasattr(self, 'system_activity_log') and self.system_activity_log:
+                        # Create a copy to avoid modifying the original list during iteration
+                        activities = list(self.system_activity_log)
+                    else:
+                        # Initialize if not already present
+                        self.system_activity_log = []
+                        
+                        # Add a startup activity if the list is empty
+                        activities.append((
+                            current_time,
+                            f"Dashboard initialized: Monitoring emails"
+                        ))
+                        
+                    # Add current refresh activity
+                    activities.insert(0, (
+                        current_time,
                         f"Dashboard refreshed: {processed} emails processed"
                     ))
                     
-                    # Add pending review activity if we have any
-                    if pending_count > 0:
-                        minute_offset += 2
-                        activities.append((
-                            current_time - datetime.timedelta(minutes=minute_offset),
-                            f"Pending review: {pending_count} emails awaiting human review"
-                        ))
+                    # Keep the system_activity_log updated and limited to 20 most recent items
+                    self.system_activity_log = activities[:20]
                     
-                    # Add error activity if any errors
-                    if errors > 0:
-                        minute_offset += 3
-                        activities.append((
-                            current_time - datetime.timedelta(minutes=minute_offset),
-                            f"System detected {errors} errors during processing"
-                        ))
-                    
-                    # Add standard activities
-                    minute_offset += 5
-                    activities.append((
-                        current_time - datetime.timedelta(minutes=minute_offset),
-                        "Email processed: Payment update request"
-                    ))
-                    
-                    minute_offset += 4
-                    activities.append((
-                        current_time - datetime.timedelta(minutes=minute_offset),
-                        "Stripe API request: Update card"
-                    ))
-                    
-                    minute_offset += 3
-                    activities.append((
-                        current_time - datetime.timedelta(minutes=minute_offset),
-                        "Human review completed: Refund request"
-                    ))
+                    # Sort activities by timestamp (newest first)
+                    activities.sort(key=lambda x: x[0], reverse=True)
                     
                     # Add the activities to the UI
-                    for timestamp, message in activities:
+                    for timestamp, message in activities[:10]:  # Show only the 10 most recent activities
                         time_str = timestamp.strftime("%H:%M")
                         activity_list.mount(Static(f"🕒 {time_str} - {message} ✅", classes="activity-item"))
                     
@@ -2158,23 +2124,33 @@ class PaymentUpdateCLI(App):
 
     def refresh_reviews(self) -> None:
         """Refresh the reviews table with current data."""
-        table = self.query_one("#review-table", DataTable)
-        table.clear(columns=True)
-        table.add_columns("ID", "From", "Subject", "Intent", "Confidence")
-        
-        for i, review in enumerate(self.pending_reviews, 1):
-            # Truncate subject if it's too long
-            subject = review["email"]["subject"]
-            if len(subject) > 40:
-                subject = subject[:37] + "..."
+        try:
+            # First check if we're on the tab that contains the review table
+            current_tab = self.query_one("#main-content", TabbedContent).active
+            if current_tab != "dashboard-tab":  # Skip if not on dashboard tab
+                return
                 
-            table.add_row(
-                str(i),
-                review["email"]["from"],
-                subject,
-                review["intent"],
-                f"{review['confidence']:.2f}"
-            )
+            # Only try to query the table if we're on the right tab
+            table = self.query_one("#review-table", DataTable)
+            table.clear(columns=True)
+            table.add_columns("ID", "From", "Subject", "Intent", "Confidence")
+            
+            for i, review in enumerate(self.pending_reviews, 1):
+                # Truncate subject if it's too long
+                subject = review["email"]["subject"]
+                if len(subject) > 40:
+                    subject = subject[:37] + "..."
+                    
+                table.add_row(
+                    str(i),
+                    review["email"]["from"],
+                    subject,
+                    review["intent"],
+                    f"{review['confidence']:.2f}"
+                )
+        except Exception as e:
+            # Handle case where tabbed content or table is not available
+            pass
 
     async def watch_updates(self) -> None:
         """Worker that periodically checks for data updates."""
@@ -2501,7 +2477,7 @@ class PaymentUpdateCLI(App):
     def action_refresh(self) -> None:
         """Refresh the dashboard and reviews."""
         self.update_dashboard()
-        self.refresh_reviews()
+        self.refresh_reviews()  # This now checks active tab internally
         self.notify("Dashboard refreshed", severity="info")
 
     def action_view_reviews(self) -> None:
@@ -2541,18 +2517,7 @@ class PaymentUpdateCLI(App):
         
         # Initialize test data if none is available (for development/testing)
         if self.pending_reviews is None or len(self.pending_reviews) == 0:
-            self.pending_reviews = [
-                {
-                    "email": {
-                        "from": "test@example.com",
-                        "subject": "Payment Method Update",
-                        "body": "Hello, I need to update my payment method"
-                    },
-                    "intent": "update_payment_method",
-                    "confidence": 0.97,
-                    "entities": {}
-                }
-            ]
+            self.pending_reviews = []
         
         # Print diagnostic info to console
         print("\n===== STARTING APPLICATION =====")

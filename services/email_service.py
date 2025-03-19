@@ -96,11 +96,15 @@ class EmailService:
                                     self.logger.error(f"Failed to get email body: {e}")
                                     body = ""
                             
+                            # Extract message-id for proper email threading
+                            message_id = email.get('Message-ID', '')
+                            
                             emails.append({
                                 "uid": uid,
                                 "from": from_email,
                                 "subject": subject,
-                                "body": body
+                                "body": body,
+                                "message_id": message_id
                             })
                             
                         except Exception as e:

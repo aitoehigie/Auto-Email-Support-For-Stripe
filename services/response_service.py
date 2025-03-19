@@ -252,7 +252,7 @@ HunchBank Support Team"""
                 "body": "We've received your request and will get back to you as soon as possible."
             }
 
-    def send_email(self, customer_email, response):
+    def send_email(self, customer_email, response, original_message_id=None):
         """
         Send email to customer with retry logic and multiple provider fallbacks
         
@@ -281,10 +281,16 @@ HunchBank Support Team"""
         msg["Subject"] = subject
         msg["From"] = self.email_user
         msg["To"] = customer_email
+        msg["Reply-To"] = customer_email  # Ensure replies go back to the original sender
         msg["Date"] = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime())
         
-        # Add message ID for better deliverability
+        # Add message ID and References header for proper threading
         msg["Message-ID"] = f"<{time.time()}.{id(msg)}@hunchbank.example.com>"
+        # Add In-Reply-To header to link this response to the original email
+        # This helps maintain email threading in clients
+        if original_message_id:
+            msg["In-Reply-To"] = original_message_id
+            msg["References"] = original_message_id
         
         # Attach text body
         text_part = MIMEText(body, "plain")

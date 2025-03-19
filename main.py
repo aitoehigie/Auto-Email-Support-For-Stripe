@@ -124,7 +124,7 @@ class System:
             response = self.response_service.generate_response(
                 "unknown", False, "Invalid email address format", email["from"]
             )
-            self.response_service.send_email(email["from"], response)
+            self.response_service.send_email(email["from"], response, email.get("message_id", None))
             return
         
         # Classify intent
@@ -190,7 +190,7 @@ class System:
         
         # Send response to customer
         response = self.response_service.generate_response(intent, success, message, email["from"])
-        email_sent = self.response_service.send_email(email["from"], response)
+        email_sent = self.response_service.send_email(email["from"], response, email.get("message_id", None))
         
         # Mark as read if successfully handled
         if success and email_sent:
@@ -212,7 +212,7 @@ class System:
             response = self.response_service.generate_response(
                 "unknown", True, "We've received your message and our team will review it shortly", email["from"]
             )
-            self.response_service.send_email(email["from"], response)
+            self.response_service.send_email(email["from"], response, email.get("message_id", None))
 
 def main():
     """Entry point for the application"""
