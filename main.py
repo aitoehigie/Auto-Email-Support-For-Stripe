@@ -6,6 +6,7 @@ from handlers.payment_handler import PaymentHandler, BillingHandler, Subscriptio
 from cli.interface import PaymentUpdateCLI
 from human_loop.review_system import ReviewSystem
 from utils.logger import setup_logger, log_exception, LogCapture
+from utils.database import get_db
 from config.config import Config
 import threading
 import signal
@@ -13,10 +14,28 @@ import sys
 import re
 import time
 import os
+from datetime import datetime
 
 class System:
     def __init__(self):
         self.logger = setup_logger("Main", os.path.join("logs", "hunchbank.log"), console_output=False)
+        
+        # Get database connection
+        if Config.USE_DATABASE:
+            self.db = get_db()
+            self.logger.info("Database service initialized")
+            
+            # Load metrics from database if available
+            try:
+                metrics = self.db.get_latest_metrics()
+                self.processed_count = [metrics["processed_count"]]  # Use latest from DB
+                self.logger.info(f"Loaded processed count from database: {self.processed_count[0]}")
+            except Exception as e:
+                self.logger.error(f"Error loading metrics from database: {str(e)}")
+                self.processed_count = [0]  # Default if DB fails
+        else:
+            self.processed_count = [0]  # Mutable to share between threads
+        
         self.email_service = EmailService()
         self.nlp_service = NLPService()
         self.stripe_service = StripeService()
@@ -30,10 +49,13 @@ class System:
         
         self.response_service = ResponseService()
         self.review_system = ReviewSystem()
-        self.processed_count = [0]  # Mutable to share between threads
         self.running = True
         signal.signal(signal.SIGINT, self.shutdown)
         signal.signal(signal.SIGTERM, self.shutdown)
+        
+        # Add system startup to activity log if database is enabled
+        if Config.USE_DATABASE:
+            self.db.add_activity("System started", "system", "Main")
         
         # Basic validation
         self._validate_configuration()
@@ -118,6 +140,27 @@ class System:
 
     def _process_single_email(self, email):
         """Process a single email"""
+        # Log email to database if using database
+        if Config.USE_DATABASE:
+            try:
+                # Store initial email receipt in database
+                self.db.log_email_processing(
+                    email_id=email.get("uid", str(time.time())),
+                    sender=email["from"],
+                    subject=email.get("subject", ""),
+                    received_at=datetime.now().isoformat(),
+                    status="received"
+                )
+                
+                # Add activity log entry
+                self.db.add_activity(
+                    f"Email received from {email['from']}", 
+                    "email", 
+                    "EmailProcessor"
+                )
+            except Exception as e:
+                self.logger.error(f"Error logging email to database: {str(e)}")
+        
         # Validate email format
         if not self._is_valid_email(email["from"]):
             self.logger.warning(f"Invalid email format: {email['from']}")
@@ -125,11 +168,51 @@ class System:
                 "unknown", False, "Invalid email address format", email["from"]
             )
             self.response_service.send_email(email["from"], response, email.get("message_id", None))
+            
+            # Update email status in database
+            if Config.USE_DATABASE:
+                try:
+                    self.db.update_email_status(
+                        email_id=email.get("uid", str(time.time())),
+                        status="error",
+                        intent="unknown"
+                    )
+                    
+                    # Log error
+                    self.db.log_error(
+                        "invalid_email", 
+                        f"Invalid email format: {email['from']}", 
+                        "EmailProcessor"
+                    )
+                except Exception as e:
+                    self.logger.error(f"Error updating email status in database: {str(e)}")
+            
             return
         
         # Classify intent
         intent, entities, confidence = self.nlp_service.classify_intent(email["body"])
         self.logger.info(f"Intent: {intent}, Confidence: {confidence:.2f}, Entities: {entities}")
+        
+        # Update email in database with intent classification
+        if Config.USE_DATABASE:
+            try:
+                self.db.update_email_status(
+                    email_id=email.get("uid", str(time.time())),
+                    status="classified",
+                    intent=intent,
+                    confidence=confidence
+                )
+                
+                # Update intent stats
+                today = datetime.now().strftime("%Y-%m-%d")
+                self.db.update_intent_stats(
+                    date=today,
+                    intent=intent,
+                    count=1,
+                    auto_processed=0  # Will be updated if auto-processed
+                )
+            except Exception as e:
+                self.logger.error(f"Error updating email classification in database: {str(e)}")
         
         # Handle based on intent and confidence threshold
         if confidence > Config.CONFIDENCE_THRESHOLD:
@@ -174,6 +257,16 @@ class System:
         """Handle a request using the appropriate handler"""
         self.logger.info(f"Handling {intent} for {email['from']}")
         
+        # Update email in database if using database
+        if Config.USE_DATABASE:
+            try:
+                self.db.update_email_status(
+                    email_id=email.get("uid", str(time.time())),
+                    status="processing"
+                )
+            except Exception as e:
+                self.logger.error(f"Error updating email status in database: {str(e)}")
+        
         # Look up customer
         customer_id = self.stripe_service.get_customer_by_email(email["from"])
         if not customer_id:
@@ -182,6 +275,25 @@ class System:
                 intent, False, "No account found for this email address", email["from"]
             )
             self.response_service.send_email(email["from"], response)
+            
+            # Update email status in database
+            if Config.USE_DATABASE:
+                try:
+                    self.db.update_email_status(
+                        email_id=email.get("uid", str(time.time())),
+                        status="error",
+                        processed_at=datetime.now().isoformat()
+                    )
+                    
+                    # Log error
+                    self.db.log_error(
+                        "customer_not_found", 
+                        f"No customer found for {email['from']}", 
+                        "EmailProcessor"
+                    )
+                except Exception as e:
+                    self.logger.error(f"Error updating email status in database: {str(e)}")
+                    
             return
         
         # Process the request with the appropriate handler
@@ -196,22 +308,94 @@ class System:
         if success and email_sent:
             if self.email_service.mark_as_read(email["uid"]):
                 self.processed_count[0] += 1
+                
+                # Create activity message for both database and dashboard
+                activity_msg = f"Email processed: {intent} from {email['from']}"
+                
+                # Add to database activity log if using database
+                if Config.USE_DATABASE:
+                    try:
+                        # Log activity
+                        self.db.add_activity(activity_msg, "email", "EmailProcessor")
+                        
+                        # Update email status
+                        self.db.update_email_status(
+                            email_id=email.get("uid", str(time.time())),
+                            status="processed",
+                            processed_at=datetime.now().isoformat(),
+                            auto_processed=True
+                        )
+                        
+                        # Update intent stats - increment auto-processed count
+                        today = datetime.now().strftime("%Y-%m-%d")
+                        self.db.update_intent_stats(
+                            date=today,
+                            intent=intent,
+                            count=0,  # Already counted when classified
+                            auto_processed=1
+                        )
+                        
+                        # Update system metrics
+                        if hasattr(self, 'db'):
+                            pending_count = len(self.review_system.pending_reviews) if hasattr(self.review_system, 'pending_reviews') else 0
+                            self.db.update_metrics(
+                                processed_count=self.processed_count[0],
+                                auto_processed_count=self.processed_count[0] - pending_count,
+                                error_count=0,  # Placeholder
+                                pending_reviews_count=pending_count
+                            )
+                    except Exception as e:
+                        self.logger.error(f"Error updating database: {str(e)}")
+                
                 # Emit an activity log entry for dashboard
                 if cli is not None and hasattr(cli, 'system_activity_log'):
-                    import datetime
+                    # Use already created activity_msg 
                     cli.system_activity_log.insert(0, (
-                        datetime.datetime.now(),
-                        f"Email processed: {intent} from {email['from']}"
+                        datetime.now(),
+                        activity_msg
                     ))
                     # Keep only 20 most recent activities
                     cli.system_activity_log = cli.system_activity_log[:20]
                     # Update UI
                     cli.post_message(cli.UpdateProcessed(self.processed_count[0]))
+                    
                 self.logger.info(f"Email marked as read and processed successfully")
             else:
                 self.logger.error(f"Failed to mark email as read")
+                
+                # Log error in database
+                if Config.USE_DATABASE:
+                    try:
+                        self.db.log_error(
+                            "mark_read_failed", 
+                            f"Failed to mark email as read: {email.get('uid', '')}", 
+                            "EmailProcessor"
+                        )
+                    except Exception as e:
+                        self.logger.error(f"Error logging error to database: {str(e)}")
         else:
             self.logger.warning(f"Email not marked as read: success={success}, email_sent={email_sent}")
+            
+            # Update status in database
+            if Config.USE_DATABASE:
+                try:
+                    status = "error" if not success else "sending_failed"
+                    self.db.update_email_status(
+                        email_id=email.get("uid", str(time.time())),
+                        status=status,
+                        processed_at=datetime.now().isoformat()
+                    )
+                    
+                    # Log error
+                    error_type = "handler_error" if not success else "sending_error"
+                    self.db.log_error(
+                        error_type, 
+                        f"Email handling failed: {message}", 
+                        "EmailProcessor",
+                        f"Intent: {intent}, Success: {success}, Email sent: {email_sent}"
+                    )
+                except Exception as e:
+                    self.logger.error(f"Error updating email status in database: {str(e)}")
 
     def _send_to_human_review(self, email, intent, entities, confidence):
         """Send email to human review queue"""

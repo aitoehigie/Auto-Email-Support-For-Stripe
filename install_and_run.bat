@@ -100,6 +100,11 @@ echo Creating logs directory...
 if not exist "logs" mkdir logs
 echo Log directory created at: %APP_DIR%\logs
 
+REM Create database directory
+echo Creating database directory...
+if not exist "database" mkdir database
+echo Database directory created at: %APP_DIR%\database
+
 REM Create a .env file if not present
 if not exist ".env" (
     echo Creating default .env file...
@@ -117,6 +122,11 @@ if not exist ".env" (
         echo NLP_API_KEY=your_anthropic_key
         echo # System configuration
         echo CONFIDENCE_THRESHOLD=0.9
+        echo # Database settings
+        echo USE_DATABASE=true
+        echo DATABASE_PATH=database/hunchbank.db
+        echo DATABASE_METRICS_INTERVAL=60
+        echo DATABASE_RETAIN_DAYS=90
     ) > .env
     
     echo.

@@ -45,6 +45,12 @@ class Config:
     EMAIL_BATCH_SIZE = int(os.getenv("EMAIL_BATCH_SIZE", 100))
     MAX_RETRIES = int(os.getenv("MAX_RETRIES", 3))
     RETRY_DELAY = int(os.getenv("RETRY_DELAY", 2))  # seconds
+    
+    # Database settings
+    USE_DATABASE = os.getenv("USE_DATABASE", "true").lower() == "true"
+    DATABASE_PATH = os.getenv("DATABASE_PATH", None)  # None uses default path
+    DATABASE_METRICS_INTERVAL = int(os.getenv("DATABASE_METRICS_INTERVAL", 60))  # seconds
+    DATABASE_RETAIN_DAYS = int(os.getenv("DATABASE_RETAIN_DAYS", 90))  # days to keep data
 
 # Validate required configuration
 required_configs = [

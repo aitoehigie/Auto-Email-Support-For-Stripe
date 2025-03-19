@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.style import Style
 from utils.logger import setup_logger
+from utils.database import get_db
 import asyncio
 import logging
 import sys
@@ -1820,22 +1821,57 @@ class PaymentUpdateCLI(App):
 
     def __init__(self, review_system, config=None):
         super().__init__()
-        self.logger = setup_logger("CLIInterface", console_output=False)
         self.review_system = review_system
         self.config = config
+        self.start_time = datetime.now()
+        self.system_activity_log = []
+        
+        # Set up basic default values first
+        self.processed_count = 0
+        self.auto_processed = 0
+        self.error_count = 0
+        self.db = None
+        
+        # Initialize database if enabled - but don't log anything yet
+        if hasattr(Config, 'USE_DATABASE') and Config.USE_DATABASE:
+            self.db = get_db()
+            print("Database service initialized for UI")
+            
+            # Try to load initial metrics from database
+            try:
+                metrics = self.db.get_latest_metrics()
+                self.processed_count = metrics["processed_count"]
+                self.auto_processed = metrics["auto_processed_count"]
+                self.error_count = metrics["error_count"]
+                print(f"Loaded metrics from database: processed={self.processed_count}, auto={self.auto_processed}, errors={self.error_count}")
+                
+                # Load activities
+                activities = self.db.get_activities(limit=20)
+                self.system_activity_log = [(a['timestamp'], a['activity']) for a in activities]
+                print(f"Loaded {len(self.system_activity_log)} activities from database")
+            except Exception as e:
+                print(f"Error loading initial metrics from database: {str(e)}")
+        else:
+            print("Database disabled, using in-memory storage for UI")
+            
+        # Set up logger after everything else is initialized
+        self.logger = setup_logger("CLIInterface", console_output=False)
         self.log_handler = TextualLogHandler(self)
         self.logger.addHandler(self.log_handler)
-        self.start_time = datetime.now()
         
         # Initialize empty pending reviews list to prevent startup issues
         if not hasattr(review_system, 'get_pending_reviews'):
             self.review_system.get_pending_reviews = lambda: []
             
-        # Initialize default values for reactive properties
-        self.processed_count = 0
+        # Initialize default values for reactive properties (if not loaded from DB)
+        if not hasattr(self, 'processed_count'):
+            self.processed_count = 0
+        if not hasattr(self, 'auto_processed'):
+            self.auto_processed = 0
+        if not hasattr(self, 'error_count'):
+            self.error_count = 0
+            
         self.pending_reviews = []
-        self.auto_processed = 5
-        self.error_count = 0
         self.uptime_seconds = 0
         self.auto_refresh_enabled = True  # Auto-refresh enabled by default
         self.auto_refresh_interval = 30  # Seconds
@@ -2023,6 +2059,27 @@ class PaymentUpdateCLI(App):
 
     def on_mount(self) -> None:
         """Set up the UI when the app is first mounted."""
+        # Now that the app is running, we can use our log handler safely
+        self._running = True
+        
+        # Initialize log content first
+        try:
+            log = self.query_one("#log", Log)
+            log.write_line("[bold green]System starting up...[/bold green]")
+            log.write_line("Initializing services...")
+            
+            # Now log any database information if we loaded it earlier
+            if hasattr(self, 'db') and self.db is not None:
+                log.write_line(f"Database connected: {self.processed_count} emails processed")
+            
+            log.write_line("Email service connected")
+            log.write_line("Dashboard ready")
+            log.write_line("Loading configuration...")
+            log.write_line("Ready to process emails")
+            log.write_line("Waiting for incoming messages...")
+        except Exception as e:
+            print(f"Log initialization error: {e}")
+        
         # Select dashboard tab by default
         try:
             tabbed_content = self.query_one("#main-content", TabbedContent)
@@ -2051,19 +2108,6 @@ class PaymentUpdateCLI(App):
                     
         except Exception as e:
             print(f"Tab selection error: {e}")
-        
-        # Initialize log content
-        try:
-            log = self.query_one("#log", Log)
-            log.write_line("[bold green]System starting up...[/bold green]")
-            log.write_line("Initializing services...")
-            log.write_line("Email service connected")
-            log.write_line("Dashboard ready")
-            log.write_line("Loading configuration...")
-            log.write_line("Ready to process emails")
-            log.write_line("Waiting for incoming messages...")
-        except Exception as e:
-            print(f"Log initialization error: {e}")
         
         # Initialize the review table
         try:
@@ -2782,8 +2826,13 @@ class TextualLogHandler(logging.Handler):
                 msg = f"WARNING: {msg}"
             elif record.levelno >= logging.INFO:
                 msg = f"INFO: {msg}"
-                
-            self.app.call_from_thread(self._write_to_log, msg)
+            
+            # Only attempt to write to log if app is running
+            if hasattr(self.app, '_running') and self.app._running:
+                self.app.call_from_thread(self._write_to_log, msg)
+            # Otherwise, just print to console as fallback
+            else:
+                print(msg)
         except Exception:
             self.handleError(record)
             

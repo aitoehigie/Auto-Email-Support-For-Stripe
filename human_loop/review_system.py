@@ -10,6 +10,7 @@ from email.mime.multipart import MIMEMultipart
 import requests
 from datetime import datetime, timedelta
 from config.config import Config
+from utils.database import get_db
 
 class ReviewSystem:
     """
@@ -21,6 +22,9 @@ class ReviewSystem:
         self.processed_reviews = []
         self.review_history = []
         
+        # Get database connection
+        self.db = get_db()
+        
         # Create notification queue and start worker
         self.notification_queue = queue.Queue()
         self.worker_thread = threading.Thread(target=self._notification_worker, daemon=True)
@@ -30,6 +34,10 @@ class ReviewSystem:
         self.notification_channels = self._load_notification_channels()
         self.risk_thresholds = self._load_risk_thresholds()
         
+        # Load any pending reviews from database if using database
+        if Config.USE_DATABASE:
+            self._load_pending_reviews_from_db()
+            
         self.logger.info("Review system initialized")
         
     def _load_notification_channels(self):
@@ -68,6 +76,17 @@ class ReviewSystem:
             ).split(",")
         }
     
+    def _load_pending_reviews_from_db(self):
+        """Load pending reviews from database"""
+        if not Config.USE_DATABASE:
+            return
+            
+        try:
+            self.pending_reviews = self.db.get_pending_reviews()
+            self.logger.info(f"Loaded {len(self.pending_reviews)} pending reviews from database")
+        except Exception as e:
+            self.logger.error(f"Error loading pending reviews from database: {str(e)}")
+    
     def add_for_review(self, email, intent, entities, confidence):
         """
         Add an email to the review queue
@@ -94,6 +113,13 @@ class ReviewSystem:
         self.pending_reviews.append(review)
         self.logger.info(f"Added review {review_id} to queue - Intent: {intent}, Risk: {review['risk_level']}")
         
+        # Update dashboard activity log
+        activity_msg = f"Review added: {intent} request from {email['from']} (Risk: {review['risk_level']})"
+        
+        # Add to database activity log if using database
+        if Config.USE_DATABASE:
+            self.db.add_activity(activity_msg, "review", "ReviewSystem")
+        
         # Update dashboard activity log if cli is available
         try:
             # Get the cli reference directly - more reliable than import
@@ -101,7 +127,7 @@ class ReviewSystem:
             if cli is not None and hasattr(cli, 'system_activity_log'):
                 cli.system_activity_log.insert(0, (
                     datetime.now(),
-                    f"Review added: {intent} request from {email['from']} (Risk: {review['risk_level']})"
+                    activity_msg
                 ))
                 # Keep only the most recent activities
                 cli.system_activity_log = cli.system_activity_log[:20]
@@ -113,7 +139,7 @@ class ReviewSystem:
         # Send notification based on risk level
         self._queue_notification(review)
         
-        # In production, also persist to database
+        # Persist to database
         self._persist_review(review)
         
         return review_id
@@ -467,40 +493,44 @@ class ReviewSystem:
     
     def _persist_review(self, review):
         """
-        Persist review to storage (in production, this would use a database)
+        Persist review to storage
         
         Args:
             review (dict): Review data
         """
-        # In production, this would store to a database
-        self.logger.info(f"Would persist review {review['id']} to database")
-        
-        # Example production database implementation:
-        # 
-        # import sqlite3
-        # 
-        # conn = sqlite3.connect('hunchbank.db')
-        # cursor = conn.cursor()
-        # 
-        # cursor.execute('''
-        #     INSERT INTO reviews (
-        #         id, customer_email, intent, confidence, risk_level, 
-        #         email_subject, email_body, entities, status, created_at
-        #     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        # ''', (
-        #     review['id'],
-        #     review['email']['from'],
-        #     review['intent'],
-        #     review['confidence'],
-        #     review['risk_level'],
-        #     review['email']['subject'],
-        #     review['email']['body'],
-        #     json.dumps(review['entities']),
-        #     review['status'],
-        #     review['created_at']
-        # ))
-        # conn.commit()
-        # conn.close()
+        if not Config.USE_DATABASE:
+            # Skip if database disabled
+            self.logger.info(f"Database disabled, skipping persistence of review {review['id']}")
+            return
+            
+        try:
+            # Store in SQLite database
+            self.db.add_review(
+                review_id=review['id'],
+                email_id=review['email'].get('uid', review['email'].get('id', str(time.time()))),
+                customer_email=review['email']['from'],
+                intent=review['intent'],
+                confidence=review['confidence'],
+                risk_level=review['risk_level'],
+                email_subject=review['email'].get('subject', ''),
+                email_body=review['email'].get('body', ''),
+                entities=review['entities'],
+                status=review['status'],
+                created_at=review['created_at']
+            )
+            
+            # Also increment the intent stats for this date
+            today = datetime.now().strftime("%Y-%m-%d")
+            self.db.update_intent_stats(
+                date=today,
+                intent=review['intent'],
+                count=1,
+                human_reviewed=1
+            )
+            
+            self.logger.info(f"Review {review['id']} persisted to database")
+        except Exception as e:
+            self.logger.error(f"Error persisting review to database: {str(e)}")
         
     def get_pending_reviews(self):
         """
@@ -509,6 +539,15 @@ class ReviewSystem:
         Returns:
             list: List of pending review objects
         """
+        # If using database, prioritize that as the source of truth
+        if Config.USE_DATABASE:
+            try:
+                # Refresh from database to ensure we have latest data
+                self.pending_reviews = self.db.get_pending_reviews()
+            except Exception as e:
+                self.logger.error(f"Error getting pending reviews from database: {str(e)}")
+                # Fall back to in-memory list if database query fails
+        
         return self.pending_reviews
     
     def get_review_by_id(self, review_id):
@@ -521,6 +560,16 @@ class ReviewSystem:
         Returns:
             dict: Review data or None if not found
         """
+        # If using database, prioritize that as the source of truth
+        if Config.USE_DATABASE:
+            try:
+                review = self.db.get_review_by_id(review_id)
+                if review:
+                    return review
+            except Exception as e:
+                self.logger.error(f"Error getting review {review_id} from database: {str(e)}")
+                # Fall back to in-memory lists if database query fails
+        
         # Check pending reviews
         for review in self.pending_reviews:
             if review.get("id") == review_id:
@@ -688,26 +737,36 @@ class ReviewSystem:
         Args:
             review (dict): Updated review data
         """
-        # In production, this would update database
-        self.logger.info(f"Would update review {review.get('id', 'unknown')} in database: status={review.get('status')}")
-        
-        # Example production database implementation:
-        # conn = sqlite3.connect('hunchbank.db')
-        # cursor = conn.cursor()
-        # 
-        # cursor.execute('''
-        #     UPDATE reviews 
-        #     SET status = ?, intent = ?, modified_at = ?, processed_at = ?
-        #     WHERE id = ?
-        # ''', (
-        #     review.get('status'),
-        #     review.get('intent'),
-        #     review.get('modified_at'),
-        #     review.get('processed_at'),
-        #     review.get('id')
-        # ))
-        # conn.commit()
-        # conn.close()
+        if not Config.USE_DATABASE:
+            # Skip if database disabled
+            self.logger.info(f"Database disabled, skipping update of review {review.get('id', 'unknown')}")
+            return
+            
+        try:
+            # Update in SQLite database
+            self.db.update_review(
+                review_id=review.get('id'),
+                status=review.get('status'),
+                processed_at=review.get('processed_at'),
+                modified_at=review.get('modified_at'),
+                new_intent=review.get('intent')
+            )
+            
+            # Also update email status if we have email_id
+            if 'email' in review and 'uid' in review['email']:
+                try:
+                    self.db.update_email_status(
+                        email_id=review['email']['uid'],
+                        status='reviewed',
+                        processed_at=review.get('processed_at', datetime.now().isoformat()),
+                        intent=review.get('intent')
+                    )
+                except Exception as e:
+                    self.logger.error(f"Error updating email status: {str(e)}")
+            
+            self.logger.info(f"Review {review.get('id', 'unknown')} updated in database: status={review.get('status')}")
+        except Exception as e:
+            self.logger.error(f"Error updating review in database: {str(e)}")
         
     def get_stats(self):
         """
@@ -716,6 +775,18 @@ class ReviewSystem:
         Returns:
             dict: Statistics about reviews
         """
+        # If database is enabled, use it for stats
+        if Config.USE_DATABASE:
+            try:
+                # Use database for more accurate stats
+                stats = self.db.get_review_stats()
+                self.logger.debug("Got review stats from database")
+                return stats
+            except Exception as e:
+                self.logger.error(f"Error getting stats from database: {str(e)}")
+                # Fall back to in-memory calculation if database fails
+        
+        # In-memory calculation as fallback
         now = datetime.now()
         today_start = datetime(now.year, now.month, now.day, 0, 0, 0)
         

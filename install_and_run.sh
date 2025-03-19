@@ -67,6 +67,11 @@ echo "Setting up logs directory..."
 mkdir -p "logs"
 echo "Log directory created at: $APP_DIR/logs"
 
+# Create database directory if it doesn't exist
+echo "Setting up database directory..."
+mkdir -p "database"
+echo "Database directory created at: $APP_DIR/database"
+
 # Create a .env file if not present (user must fill this in)
 if [ ! -f ".env" ]; then
     cat <<EOF > .env
@@ -79,6 +84,12 @@ SMTP_USE_TLS=true
 STRIPE_API_KEY=your_stripe_key
 NLP_API_KEY=your_anthropic_key
 CONFIDENCE_THRESHOLD=0.9
+
+# Database settings
+USE_DATABASE=true
+DATABASE_PATH=database/hunchbank.db
+DATABASE_METRICS_INTERVAL=60
+DATABASE_RETAIN_DAYS=90
 EOF
     echo "Please edit .env with your credentials."
     echo "You can do this by running: nano $APP_DIR/.env"
