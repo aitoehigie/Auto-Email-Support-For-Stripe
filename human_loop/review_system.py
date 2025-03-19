@@ -206,7 +206,7 @@ class ReviewSystem:
     
     def _send_email_notification(self, review, recipients):
         """
-        Send email notification about review
+        Send email notification about review using robust dual-mode approach
         
         Args:
             review (dict): Review data
@@ -227,6 +227,8 @@ class ReviewSystem:
             msg["Subject"] = f"{risk_prefix}Review Required: {review['intent']} ({review['id']})"
             msg["From"] = Config.EMAIL_USER
             msg["To"] = ", ".join(recipients)
+            msg["Date"] = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime())
+            msg["Message-ID"] = f"<{time.time()}.{id(msg)}@hunchbank.example.com>"
             
             # Create email body with review details
             body = f"""
@@ -262,17 +264,91 @@ class ReviewSystem:
             text_part = MIMEText(text_body, "plain")
             msg.attach(text_part)
             
-            # Send email
-            with smtplib.SMTP(Config.SMTP_SERVER, Config.SMTP_PORT) as server:
-                if Config.SMTP_USE_TLS:
-                    server.starttls()
-                server.login(Config.EMAIL_USER, Config.EMAIL_PASS)
-                server.send_message(msg)
+            # Try sending with SSL first (port 465) - most reliable for Gmail
+            if self._try_ssl_email(msg):
+                self.logger.info(f"Sent email notification for review {review['id']} to {len(recipients)} recipients via SSL")
+                return
                 
-            self.logger.info(f"Sent email notification for review {review['id']} to {len(recipients)} recipients")
+            # If SSL fails, try TLS fallback (port 587)
+            if self._try_tls_email(msg):
+                self.logger.info(f"Sent email notification for review {review['id']} to {len(recipients)} recipients via TLS fallback")
+                return
+                
+            # If both methods fail, log the error
+            self.logger.error("Failed to send email notification using both SSL and TLS methods")
             
         except Exception as e:
             self.logger.error(f"Failed to send email notification: {str(e)}")
+            
+    def _try_ssl_email(self, msg):
+        """Attempt to send email using SSL on port 465"""
+        port = 465
+        
+        for attempt in range(Config.MAX_RETRIES):
+            try:
+                with smtplib.SMTP_SSL(
+                    Config.SMTP_SERVER, 
+                    port, 
+                    timeout=Config.SMTP_TIMEOUT
+                ) as server:
+                    server.ehlo()
+                    server.login(Config.EMAIL_USER, Config.EMAIL_PASS)
+                    server.send_message(msg)
+                    return True
+                    
+            except (smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError, 
+                    smtplib.SMTPSenderRefused, ConnectionError, TimeoutError) as e:
+                # Connectivity/availability errors - retry with backoff
+                self.logger.error(f"SMTP SSL error (attempt {attempt+1}): {str(e)}")
+                if attempt + 1 < Config.MAX_RETRIES:
+                    delay = Config.RETRY_DELAY * (2 ** attempt)  # Exponential backoff
+                    self.logger.info(f"Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                
+            except Exception as e:
+                self.logger.error(f"Unexpected error sending email via SSL: {str(e)}")
+                if attempt + 1 < Config.MAX_RETRIES:
+                    delay = Config.RETRY_DELAY * (2 ** attempt)
+                    time.sleep(delay)
+        
+        # If we get here, all attempts failed
+        return False
+        
+    def _try_tls_email(self, msg):
+        """Attempt to send email using TLS on port 587"""
+        port = 587
+        
+        for attempt in range(Config.MAX_RETRIES):
+            try:
+                with smtplib.SMTP(
+                    Config.SMTP_SERVER, 
+                    port, 
+                    timeout=Config.SMTP_TIMEOUT
+                ) as server:
+                    server.ehlo()
+                    server.starttls()
+                    server.ehlo()  # Must call ehlo again after starttls
+                    server.login(Config.EMAIL_USER, Config.EMAIL_PASS)
+                    server.send_message(msg)
+                    return True
+                    
+            except (smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError, 
+                    smtplib.SMTPSenderRefused, ConnectionError, TimeoutError) as e:
+                # Connectivity/availability errors - retry with backoff
+                self.logger.error(f"SMTP TLS error (attempt {attempt+1}): {str(e)}")
+                if attempt + 1 < Config.MAX_RETRIES:
+                    delay = Config.RETRY_DELAY * (2 ** attempt)  # Exponential backoff
+                    self.logger.info(f"Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                    
+            except Exception as e:
+                self.logger.error(f"Unexpected error with TLS connection: {str(e)}")
+                if attempt + 1 < Config.MAX_RETRIES:
+                    delay = Config.RETRY_DELAY * (2 ** attempt)
+                    time.sleep(delay)
+                    
+        # If we get here, all TLS attempts failed
+        return False
     
     def _send_slack_notification(self, review, channel):
         """
