@@ -196,6 +196,17 @@ class System:
         if success and email_sent:
             if self.email_service.mark_as_read(email["uid"]):
                 self.processed_count[0] += 1
+                # Emit an activity log entry for dashboard
+                if cli is not None and hasattr(cli, 'system_activity_log'):
+                    import datetime
+                    cli.system_activity_log.insert(0, (
+                        datetime.datetime.now(),
+                        f"Email processed: {intent} from {email['from']}"
+                    ))
+                    # Keep only 20 most recent activities
+                    cli.system_activity_log = cli.system_activity_log[:20]
+                    # Update UI
+                    cli.post_message(cli.UpdateProcessed(self.processed_count[0]))
                 self.logger.info(f"Email marked as read and processed successfully")
             else:
                 self.logger.error(f"Failed to mark email as read")
@@ -214,6 +225,9 @@ class System:
             )
             self.response_service.send_email(email["from"], response, email.get("message_id", None))
 
+# Global CLI reference for cross-thread updates
+cli = None
+
 def main():
     """Entry point for the application"""
     try:
@@ -226,6 +240,7 @@ def main():
         email_thread.start()
         
         # Run CLI (this will block until exit)
+        global cli
         cli = PaymentUpdateCLI(system.review_system, Config)
         cli.run(system.processed_count[0])
         

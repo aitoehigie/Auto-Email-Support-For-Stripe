@@ -94,6 +94,23 @@ class ReviewSystem:
         self.pending_reviews.append(review)
         self.logger.info(f"Added review {review_id} to queue - Intent: {intent}, Risk: {review['risk_level']}")
         
+        # Update dashboard activity log if cli is available
+        try:
+            # Get the cli reference from main module
+            import sys
+            from main import cli
+            if cli is not None and hasattr(cli, 'system_activity_log'):
+                    cli.system_activity_log.insert(0, (
+                        datetime.now(),
+                        f"Review added: {intent} request from {email['from']} (Risk: {review['risk_level']})"
+                    ))
+                    # Keep only the most recent activities
+                    cli.system_activity_log = cli.system_activity_log[:20]
+                    # Force dashboard update
+                    cli.post_message(cli.UpdatePending(self.pending_reviews))
+        except Exception as e:
+            self.logger.error(f"Error updating dashboard: {str(e)}")
+        
         # Send notification based on risk level
         self._queue_notification(review)
         
@@ -545,6 +562,21 @@ class ReviewSystem:
                 "timestamp": datetime.now().isoformat()
             })
             
+            # Update dashboard activity log if CLI is available
+            try:
+                from main import cli
+                if cli is not None and hasattr(cli, 'system_activity_log'):
+                    cli.system_activity_log.insert(0, (
+                        datetime.now(),
+                        f"Review accepted: {review['intent']} from {review['email']['from']}"
+                    ))
+                    # Keep only the most recent activities
+                    cli.system_activity_log = cli.system_activity_log[:20]
+                    # Force dashboard update
+                    cli.post_message(cli.UpdatePending(self.pending_reviews))
+            except Exception as e:
+                self.logger.error(f"Error updating dashboard: {str(e)}")
+            
             # Persist update
             self._persist_review_update(review)
             
@@ -576,6 +608,21 @@ class ReviewSystem:
                 "action": "rejected",
                 "timestamp": datetime.now().isoformat()
             })
+            
+            # Update dashboard activity log if CLI is available
+            try:
+                from main import cli
+                if cli is not None and hasattr(cli, 'system_activity_log'):
+                    cli.system_activity_log.insert(0, (
+                        datetime.now(),
+                        f"Review rejected: {review['intent']} from {review['email']['from']}"
+                    ))
+                    # Keep only the most recent activities
+                    cli.system_activity_log = cli.system_activity_log[:20]
+                    # Force dashboard update
+                    cli.post_message(cli.UpdatePending(self.pending_reviews))
+            except Exception as e:
+                self.logger.error(f"Error updating dashboard: {str(e)}")
             
             # Persist update
             self._persist_review_update(review)
