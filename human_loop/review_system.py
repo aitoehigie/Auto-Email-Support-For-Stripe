@@ -96,18 +96,17 @@ class ReviewSystem:
         
         # Update dashboard activity log if cli is available
         try:
-            # Get the cli reference from main module
-            import sys
+            # Get the cli reference directly - more reliable than import
             from main import cli
             if cli is not None and hasattr(cli, 'system_activity_log'):
-                    cli.system_activity_log.insert(0, (
-                        datetime.now(),
-                        f"Review added: {intent} request from {email['from']} (Risk: {review['risk_level']})"
-                    ))
-                    # Keep only the most recent activities
-                    cli.system_activity_log = cli.system_activity_log[:20]
-                    # Force dashboard update
-                    cli.post_message(cli.UpdatePending(self.pending_reviews))
+                cli.system_activity_log.insert(0, (
+                    datetime.now(),
+                    f"Review added: {intent} request from {email['from']} (Risk: {review['risk_level']})"
+                ))
+                # Keep only the most recent activities
+                cli.system_activity_log = cli.system_activity_log[:20]
+                # Force dashboard update
+                cli.post_message(cli.UpdatePending(self.pending_reviews))
         except Exception as e:
             self.logger.error(f"Error updating dashboard: {str(e)}")
         
@@ -572,8 +571,12 @@ class ReviewSystem:
                     ))
                     # Keep only the most recent activities
                     cli.system_activity_log = cli.system_activity_log[:20]
-                    # Force dashboard update
+                    # Force dashboard update - update processed count too
                     cli.post_message(cli.UpdatePending(self.pending_reviews))
+                    if hasattr(cli, 'UpdateProcessed'):
+                        # Update processed metric
+                        if hasattr(cli, 'processed_count'):
+                            cli.post_message(cli.UpdateProcessed(cli.processed_count))
             except Exception as e:
                 self.logger.error(f"Error updating dashboard: {str(e)}")
             
@@ -619,8 +622,10 @@ class ReviewSystem:
                     ))
                     # Keep only the most recent activities
                     cli.system_activity_log = cli.system_activity_log[:20]
-                    # Force dashboard update
+                    # Force dashboard update - update processed count too
                     cli.post_message(cli.UpdatePending(self.pending_reviews))
+                    if hasattr(cli, 'UpdateProcessed') and hasattr(cli, 'processed_count'):
+                        cli.post_message(cli.UpdateProcessed(cli.processed_count))
             except Exception as e:
                 self.logger.error(f"Error updating dashboard: {str(e)}")
             

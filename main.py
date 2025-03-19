@@ -241,7 +241,12 @@ def main():
         
         # Run CLI (this will block until exit)
         global cli
+        # Initialize CLI with proper system references
         cli = PaymentUpdateCLI(system.review_system, Config)
+        # Set initial processed count value
+        if hasattr(cli, 'processed_count'):
+            cli.processed_count = system.processed_count[0]
+        # Run the CLI (this will block until exit)
         cli.run(system.processed_count[0])
         
     except KeyboardInterrupt:
