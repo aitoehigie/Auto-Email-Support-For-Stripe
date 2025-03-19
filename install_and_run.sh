@@ -62,6 +62,11 @@ else
     echo "Warning: requirements.txt not found. Dependencies may not be installed correctly."
 fi
 
+# Create logs directory if it doesn't exist
+echo "Setting up logs directory..."
+mkdir -p "logs"
+echo "Log directory created at: $APP_DIR/logs"
+
 # Create a .env file if not present (user must fill this in)
 if [ ! -f ".env" ]; then
     cat <<EOF > .env

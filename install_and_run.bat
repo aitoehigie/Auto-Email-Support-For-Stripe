@@ -95,6 +95,11 @@ if exist "requirements.txt" (
     echo Warning: requirements.txt not found. Dependencies may not be installed correctly.
 )
 
+REM Create logs directory
+echo Creating logs directory...
+if not exist "logs" mkdir logs
+echo Log directory created at: %APP_DIR%\logs
+
 REM Create a .env file if not present
 if not exist ".env" (
     echo Creating default .env file...

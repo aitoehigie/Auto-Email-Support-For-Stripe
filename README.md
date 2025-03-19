@@ -72,6 +72,13 @@ This starts the main application with:
 - Email processing in the background
 - Command-line interface for monitoring and management
 
+### Troubleshooting
+
+If you encounter any issues, refer to the [Troubleshooting Guide](TROUBLESHOOTING.md) which includes:
+- Sample log entries for common scenarios
+- Solutions for typical problems
+- Log directory information
+
 ### System Components
 
 - **Email Service**: Handles email fetching and sending
@@ -90,6 +97,40 @@ The system uses a modular architecture with the following components:
 - **CLI**: User interface for system monitoring and management
 - **Human Loop**: Review system for manual intervention
 - **Utils**: Shared utilities like logging and configuration
+
+## Logging System
+
+The application maintains extensive logs to help with monitoring and troubleshooting:
+
+### Log Directory Structure
+
+- `logs/` - Main directory for all log files (created automatically on first run)
+  - `hunchbank.log` - Primary application log with all system events
+  - `{additional log files}` - Service-specific logs may be created as needed
+
+### Log Format
+
+Log entries follow this standard format:
+```
+YYYY-MM-DD HH:MM:SS - ComponentName - LEVEL - Message
+```
+
+Example:
+```
+2025-03-19 10:00:01 - Main - INFO - Connecting to email server...
+2025-03-19 10:00:05 - Main - INFO - Handling billing_inquiry for customer@example.com
+2025-03-19 10:02:01 - Main - ERROR - SMTP SSL error (attempt 1): Connection refused
+```
+
+### Common Log Entries
+
+- Email processing events (fetching, processing, sending)
+- Intent classification results
+- Error events with detailed context
+- System startup and shutdown events
+- Review system activities
+
+Logs are automatically rotated to prevent excessive disk usage (max 10MB per file, keeping 5 backups).
 
 ## Contributing
 
