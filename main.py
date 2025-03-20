@@ -337,11 +337,25 @@ class System:
                         
                         # Update system metrics
                         if hasattr(self, 'db'):
+                            # Count errors from error_log table
+                            error_count = 0
+                            try:
+                                cursor = self.db._get_connection().cursor()
+                                cursor.execute("SELECT COUNT(*) as count FROM error_log")
+                                row = cursor.fetchone()
+                                if row:
+                                    error_count = row[0]
+                            except Exception as e:
+                                self.logger.error(f"Error counting errors: {str(e)}")
+                            
+                            # Set pending count
                             pending_count = len(self.review_system.pending_reviews) if hasattr(self.review_system, 'pending_reviews') else 0
+                            
+                            # Update metrics in database
                             self.db.update_metrics(
                                 processed_count=self.processed_count[0],
                                 auto_processed_count=self.processed_count[0] - pending_count,
-                                error_count=0,  # Placeholder
+                                error_count=error_count,
                                 pending_reviews_count=pending_count
                             )
                     except Exception as e:
@@ -356,8 +370,28 @@ class System:
                     ))
                     # Keep only 20 most recent activities
                     cli.system_activity_log = cli.system_activity_log[:20]
-                    # Update UI
+                    # Update UI with multiple metrics
                     cli.post_message(cli.UpdateProcessed(self.processed_count[0]))
+                    
+                    # Also update database metrics for dashboard
+                    if Config.USE_DATABASE and hasattr(self, 'db'):
+                        # Force immediate metrics update in database
+                        pending_count = len(self.review_system.pending_reviews) if hasattr(self.review_system, 'pending_reviews') else 0
+                        error_log_count = 0
+                        # Count errors from error_log table
+                        try:
+                            cursor = self.db._get_connection().cursor()
+                            cursor.execute("SELECT COUNT(*) FROM error_log")
+                            error_log_count = cursor.fetchone()[0]
+                        except Exception as e:
+                            self.logger.error(f"Error counting errors: {str(e)}")
+                            
+                        self.db.update_metrics(
+                            processed_count=self.processed_count[0],
+                            auto_processed_count=self.processed_count[0] - pending_count,
+                            error_count=error_log_count,
+                            pending_reviews_count=pending_count
+                        )
                     
                 self.logger.info(f"Email marked as read and processed successfully")
             else:

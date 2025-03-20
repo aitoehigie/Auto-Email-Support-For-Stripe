@@ -133,6 +133,22 @@ class ReviewSystem:
                 cli.system_activity_log = cli.system_activity_log[:20]
                 # Force dashboard update
                 cli.post_message(cli.UpdatePending(self.pending_reviews))
+                # Update metrics in database to ensure dashboard stays in sync
+                if Config.USE_DATABASE and hasattr(self, 'db'):
+                    try:
+                        # Count errors from error_log table
+                        cursor = self.db._get_connection().cursor()
+                        cursor.execute("SELECT COUNT(*) FROM error_log")
+                        error_count = cursor.fetchone()[0]
+                        # Update metrics in database
+                        self.db.update_metrics(
+                            processed_count=getattr(cli, 'processed_count', 0),
+                            auto_processed_count=getattr(cli, 'auto_processed', 0),
+                            error_count=error_count,
+                            pending_reviews_count=len(self.pending_reviews)
+                        )
+                    except Exception as e:
+                        print(f"Error updating metrics in database: {str(e)}")
         except Exception as e:
             self.logger.error(f"Error updating dashboard: {str(e)}")
         
@@ -626,6 +642,23 @@ class ReviewSystem:
                         # Update processed metric
                         if hasattr(cli, 'processed_count'):
                             cli.post_message(cli.UpdateProcessed(cli.processed_count))
+                            
+                            # If database is enabled, force a metrics update to ensure dashboard is in sync
+                            if Config.USE_DATABASE and hasattr(self, 'db'):
+                                try:
+                                    # Count errors from error_log table
+                                    cursor = self.db._get_connection().cursor()
+                                    cursor.execute("SELECT COUNT(*) FROM error_log")
+                                    error_count = cursor.fetchone()[0]
+                                    # Update metrics in database
+                                    self.db.update_metrics(
+                                        processed_count=cli.processed_count,
+                                        auto_processed_count=getattr(cli, 'auto_processed', 0),
+                                        error_count=error_count,
+                                        pending_reviews_count=len(self.pending_reviews)
+                                    )
+                                except Exception as e:
+                                    print(f"Error updating metrics in database: {str(e)}")
             except Exception as e:
                 self.logger.error(f"Error updating dashboard: {str(e)}")
             
@@ -675,6 +708,23 @@ class ReviewSystem:
                     cli.post_message(cli.UpdatePending(self.pending_reviews))
                     if hasattr(cli, 'UpdateProcessed') and hasattr(cli, 'processed_count'):
                         cli.post_message(cli.UpdateProcessed(cli.processed_count))
+                        
+                        # If database is enabled, force a metrics update to ensure dashboard is in sync
+                        if Config.USE_DATABASE and hasattr(self, 'db'):
+                            try:
+                                # Count errors from error_log table
+                                cursor = self.db._get_connection().cursor()
+                                cursor.execute("SELECT COUNT(*) FROM error_log")
+                                error_count = cursor.fetchone()[0]
+                                # Update metrics in database
+                                self.db.update_metrics(
+                                    processed_count=cli.processed_count,
+                                    auto_processed_count=getattr(cli, 'auto_processed', 0),
+                                    error_count=error_count,
+                                    pending_reviews_count=len(self.pending_reviews)
+                                )
+                            except Exception as e:
+                                print(f"Error updating metrics in database: {str(e)}")
             except Exception as e:
                 self.logger.error(f"Error updating dashboard: {str(e)}")
             
