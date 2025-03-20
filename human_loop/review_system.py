@@ -131,8 +131,31 @@ class ReviewSystem:
                 ))
                 # Keep only the most recent activities
                 cli.system_activity_log = cli.system_activity_log[:20]
-                # Force dashboard update
-                cli.post_message(cli.UpdatePending(self.pending_reviews))
+                # Directly update the dashboard
+                try:
+                    # Update the pending review card
+                    pending_card = cli.query_one("#pending-card", Container)
+                    if pending_card:
+                        # Find the value label in the card
+                        value_label = pending_card.query("Label.stats-value")
+                        if value_label and len(value_label) > 0:
+                            value_label[0].update(str(len(self.pending_reviews)))
+                            print(f"Directly updated pending card to {len(self.pending_reviews)}")
+                        else:
+                            print("Could not find value label in pending card")
+                    
+                    # Also update the review table if on dashboard tab
+                    try:
+                        if hasattr(cli, 'refresh_reviews'):
+                            cli.refresh_reviews()
+                    except Exception as e:
+                        print(f"Error refreshing reviews table: {str(e)}")
+                        
+                except Exception as e:
+                    print(f"Error directly updating dashboard from review system: {str(e)}")
+                    # Fall back to message passing if direct updates fail
+                    cli.post_message(cli.UpdatePending(self.pending_reviews))
+                    
                 # Update metrics in database to ensure dashboard stays in sync
                 if Config.USE_DATABASE and hasattr(self, 'db'):
                     try:
@@ -638,10 +661,21 @@ class ReviewSystem:
                     cli.system_activity_log = cli.system_activity_log[:20]
                     # Force dashboard update - update processed count too
                     cli.post_message(cli.UpdatePending(self.pending_reviews))
-                    if hasattr(cli, 'UpdateProcessed'):
-                        # Update processed metric
-                        if hasattr(cli, 'processed_count'):
-                            cli.post_message(cli.UpdateProcessed(cli.processed_count))
+                    if hasattr(cli, 'processed_count'):
+                        # Use direct method calls for more reliable updates
+                        try:
+                            # Update all UI elements directly
+                            cli.call_from_thread(cli.update_dashboard)
+                            cli.call_from_thread(cli.refresh_analytics_safely)
+                            cli.call_from_thread(cli.update_intent_stats)
+                            cli.call_from_thread(cli.update_error_stats)
+                            print("Review system directly updated all UI elements")
+                        except Exception as direct_e:
+                            print(f"Error directly updating UI from review: {direct_e}")
+                            # Fall back to message passing
+                            if hasattr(cli, 'UpdateProcessed'):
+                                cli.post_message(cli.UpdateProcessed(cli.processed_count))
+                                cli.post_message(cli.RefreshDashboard())
                             
                             # If database is enabled, force a metrics update to ensure dashboard is in sync
                             if Config.USE_DATABASE and hasattr(self, 'db'):
@@ -706,8 +740,21 @@ class ReviewSystem:
                     cli.system_activity_log = cli.system_activity_log[:20]
                     # Force dashboard update - update processed count too
                     cli.post_message(cli.UpdatePending(self.pending_reviews))
-                    if hasattr(cli, 'UpdateProcessed') and hasattr(cli, 'processed_count'):
-                        cli.post_message(cli.UpdateProcessed(cli.processed_count))
+                    if hasattr(cli, 'processed_count'):
+                        # Use direct method calls for more reliable updates
+                        try:
+                            # Update all UI elements directly
+                            cli.call_from_thread(cli.update_dashboard)
+                            cli.call_from_thread(cli.refresh_analytics_safely)
+                            cli.call_from_thread(cli.update_intent_stats)
+                            cli.call_from_thread(cli.update_error_stats)
+                            print("Review system directly updated all UI elements on reject")
+                        except Exception as direct_e:
+                            print(f"Error directly updating UI from reject: {direct_e}")
+                            # Fall back to message passing
+                            if hasattr(cli, 'UpdateProcessed'):
+                                cli.post_message(cli.UpdateProcessed(cli.processed_count))
+                                cli.post_message(cli.RefreshDashboard())
                         
                         # If database is enabled, force a metrics update to ensure dashboard is in sync
                         if Config.USE_DATABASE and hasattr(self, 'db'):
@@ -769,6 +816,55 @@ class ReviewSystem:
                 "details": f"Intent changed from {old_intent} to {new_intent}",
                 "timestamp": datetime.now().isoformat()
             })
+            
+            # Update dashboard if CLI is available
+            try:
+                from main import cli
+                if cli is not None and hasattr(cli, 'system_activity_log'):
+                    # Add to activity log
+                    cli.system_activity_log.insert(0, (
+                        datetime.now(),
+                        f"Review modified: {old_intent} → {new_intent} from {review['email']['from']}"
+                    ))
+                    # Keep only the most recent activities
+                    cli.system_activity_log = cli.system_activity_log[:20]
+                    
+                    # Force dashboard update
+                    cli.post_message(cli.UpdatePending(self.pending_reviews))
+                    if hasattr(cli, 'processed_count'):
+                        # Use direct method calls for more reliable updates
+                        try:
+                            # Update all UI elements directly
+                            cli.call_from_thread(cli.update_dashboard)
+                            cli.call_from_thread(cli.refresh_analytics_safely)
+                            cli.call_from_thread(cli.update_intent_stats)
+                            cli.call_from_thread(cli.update_error_stats)
+                            print("Review system directly updated all UI elements on modify")
+                        except Exception as direct_e:
+                            print(f"Error directly updating UI from modify: {direct_e}")
+                            # Fall back to message passing
+                            if hasattr(cli, 'UpdateProcessed'):
+                                cli.post_message(cli.UpdateProcessed(cli.processed_count))
+                                cli.post_message(cli.RefreshDashboard())
+                        
+                        # Update database metrics for dashboard
+                        if Config.USE_DATABASE and hasattr(self, 'db'):
+                            try:
+                                # Count errors from error_log table
+                                cursor = self.db._get_connection().cursor()
+                                cursor.execute("SELECT COUNT(*) FROM error_log")
+                                error_count = cursor.fetchone()[0]
+                                # Update metrics in database
+                                self.db.update_metrics(
+                                    processed_count=cli.processed_count,
+                                    auto_processed_count=getattr(cli, 'auto_processed', 0),
+                                    error_count=error_count,
+                                    pending_reviews_count=len(self.pending_reviews)
+                                )
+                            except Exception as e:
+                                print(f"Error updating metrics in database: {str(e)}")
+            except Exception as e:
+                self.logger.error(f"Error updating dashboard: {str(e)}")
             
             # Persist update
             self._persist_review_update(review)

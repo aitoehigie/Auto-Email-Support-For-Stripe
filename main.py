@@ -22,19 +22,44 @@ class System:
         
         # Get database connection
         if Config.USE_DATABASE:
-            self.db = get_db()
+            # First ensure that metrics exist in the database
+            from utils.database import ensure_metrics_exist
+            self.db = ensure_metrics_exist()
             self.logger.info("Database service initialized")
             
             # Load metrics from database if available
             try:
                 metrics = self.db.get_latest_metrics()
                 self.processed_count = [metrics["processed_count"]]  # Use latest from DB
-                self.logger.info(f"Loaded processed count from database: {self.processed_count[0]}")
+                self.auto_processed_count = metrics.get("auto_processed_count", 0)
+                self.error_count = metrics.get("error_count", 0)
+                self.logger.info(f"Loaded metrics from database: processed={self.processed_count[0]}, auto={self.auto_processed_count}, errors={self.error_count}")
+                
+                # Force a metrics update to ensure that we have a recent record
+                try:
+                    # Ensure the database has the latest metrics
+                    pending_count = 0
+                    if hasattr(self, 'review_system') and hasattr(self.review_system, 'pending_reviews'):
+                        pending_count = len(self.review_system.pending_reviews)
+                        
+                    self.db.update_metrics(
+                        processed_count=self.processed_count[0],
+                        auto_processed_count=self.auto_processed_count,
+                        error_count=self.error_count,
+                        pending_reviews_count=pending_count
+                    )
+                    self.logger.info(f"Forced initial metrics update in database")
+                except Exception as update_e:
+                    self.logger.error(f"Error updating initial metrics: {update_e}")
             except Exception as e:
                 self.logger.error(f"Error loading metrics from database: {str(e)}")
                 self.processed_count = [0]  # Default if DB fails
+                self.auto_processed_count = 0
+                self.error_count = 0
         else:
             self.processed_count = [0]  # Mutable to share between threads
+            self.auto_processed_count = 0
+            self.error_count = 0
         
         self.email_service = EmailService()
         self.nlp_service = NLPService()
@@ -370,8 +395,52 @@ class System:
                     ))
                     # Keep only 20 most recent activities
                     cli.system_activity_log = cli.system_activity_log[:20]
-                    # Update UI with multiple metrics
-                    cli.post_message(cli.UpdateProcessed(self.processed_count[0]))
+                    # CRITICAL DASHBOARD UPDATE: Force a direct update of all dashboard elements
+                    # This is a highly reliable method to update the dashboard
+                    try:
+                        # First, update the internal count variables
+                        cli.processed_count = self.processed_count[0]
+                        print(f"===== EMAIL PROCESSED: UPDATING DASHBOARD COUNT TO {self.processed_count[0]} =====")
+                        
+                        # DIRECT APPROACH: Call cli.update_dashboard() directly on the main thread
+                        # This is the most reliable approach and ensures all UI elements are updated
+                        cli.call_from_thread(cli.update_dashboard)
+                        
+                        # Force all dashboard and analytics updates to ensure UI is current
+                        try:
+                            # First update the dashboard 
+                            cli.call_from_thread(cli.update_dashboard)
+                            print("Successfully called update_dashboard")
+                            
+                            # Then refresh the analytics screen
+                            cli.call_from_thread(cli.refresh_analytics_safely)
+                            print("Successfully called refresh_analytics_safely")
+                            
+                            # Also directly update the analytics stats
+                            cli.call_from_thread(cli.update_intent_stats)
+                            cli.call_from_thread(cli.update_error_stats)
+                            print("Successfully updated analytics stats")
+                        except Exception as safe_e:
+                            print(f"Error in direct UI updates: {safe_e}")
+                            # Fall back to standard refresh methods
+                            try:
+                                cli.call_from_thread(cli.refresh_analytics)
+                                print("Successfully called refresh_analytics")
+                                cli.call_from_thread(cli.action_refresh)
+                                print("Successfully called action_refresh")
+                            except Exception as e:
+                                print(f"Error in fallback refresh methods: {e}")
+                    except Exception as e:
+                        print(f"CRITICAL ERROR updating dashboard directly: {str(e)}")
+                        # Fallback - try to update the label directly as a last resort
+                        try:
+                            card = cli.query_one("#processed-card", StatsCard)
+                            if card:
+                                cli.call_from_thread(lambda: card.update_value(str(self.processed_count[0])))
+                        except Exception as final_e:
+                            print(f"FINAL FALLBACK FAILED: {str(final_e)}")
+                            # Last resort - use message passing
+                            cli.post_message(cli.UpdateProcessed(self.processed_count[0]))
                     
                     # Also update database metrics for dashboard
                     if Config.USE_DATABASE and hasattr(self, 'db'):
@@ -461,11 +530,40 @@ def main():
         global cli
         # Initialize CLI with proper system references
         cli = PaymentUpdateCLI(system.review_system, Config)
-        # Set initial processed count value
-        if hasattr(cli, 'processed_count'):
-            cli.processed_count = system.processed_count[0]
+        
+        # FIXED: Always prioritize database values for metrics
+        # Give CLI access to the latest metrics from system
+        if Config.USE_DATABASE:
+            # Always use the system values which come from the database
+            if hasattr(cli, 'processed_count'):
+                cli.processed_count = system.processed_count[0]
+                # Also update auto_processed and error_count if available
+                if hasattr(cli, 'auto_processed') and hasattr(system, 'auto_processed_count'):
+                    cli.auto_processed = system.auto_processed_count
+                if hasattr(cli, 'error_count') and hasattr(system, 'error_count'):
+                    cli.error_count = system.error_count
+                print(f"Updated CLI metrics from system: processed={cli.processed_count}, auto={getattr(cli, 'auto_processed', 0)}, errors={getattr(cli, 'error_count', 0)}")
+        else:
+            # If database is disabled, use system values directly
+            if hasattr(cli, 'processed_count'):
+                cli.processed_count = system.processed_count[0]
+                
+        # Force CLI to update database with these values for consistency
+        if Config.USE_DATABASE and hasattr(cli, 'db'):
+            try:
+                pending_count = len(system.review_system.pending_reviews) if hasattr(system.review_system, 'pending_reviews') else 0
+                cli.db.update_metrics(
+                    processed_count=cli.processed_count,
+                    auto_processed_count=getattr(cli, 'auto_processed', 0),
+                    error_count=getattr(cli, 'error_count', 0),
+                    pending_reviews_count=pending_count
+                )
+                print(f"Forced final metrics update before starting CLI")
+            except Exception as e:
+                print(f"Error updating metrics before CLI start: {e}")
+        
         # Run the CLI (this will block until exit)
-        cli.run(system.processed_count[0])
+        cli.run(cli.processed_count)
         
     except KeyboardInterrupt:
         print("\nShutting down gracefully...")

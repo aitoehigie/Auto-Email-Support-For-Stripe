@@ -156,6 +156,63 @@ class DatabaseService:
         ''')
         
         connection.commit()
+        
+        # Check if we need to initialize metrics
+        cursor.execute("SELECT COUNT(*) FROM system_metrics")
+        count = cursor.fetchone()[0]
+        if count == 0:
+            self.logger.info("Initializing system metrics with default values")
+            # Initialize with default values
+            timestamp = datetime.now().isoformat()
+            
+            # Count actual processed emails if possible
+            processed_count = 0
+            try:
+                cursor.execute("SELECT COUNT(*) FROM email_processing WHERE status='processed'")
+                row = cursor.fetchone()
+                if row:
+                    processed_count = row[0]
+            except Exception as e:
+                self.logger.error(f"Error counting processed emails: {e}")
+            
+            # Count auto-processed emails
+            auto_processed = 0
+            try:
+                cursor.execute("SELECT COUNT(*) FROM email_processing WHERE auto_processed=1")
+                row = cursor.fetchone()
+                if row:
+                    auto_processed = row[0]
+            except Exception as e:
+                self.logger.error(f"Error counting auto-processed emails: {e}")
+            
+            # Count errors
+            error_count = 0
+            try:
+                cursor.execute("SELECT COUNT(*) FROM error_log")
+                row = cursor.fetchone()
+                if row:
+                    error_count = row[0]
+            except Exception as e:
+                self.logger.error(f"Error counting errors: {e}")
+            
+            # Count pending reviews
+            pending_reviews = 0
+            try:
+                cursor.execute("SELECT COUNT(*) FROM reviews WHERE status='pending'")
+                row = cursor.fetchone()
+                if row:
+                    pending_reviews = row[0]
+            except Exception as e:
+                self.logger.error(f"Error counting pending reviews: {e}")
+            
+            # Insert initial metrics record
+            cursor.execute(
+                "INSERT INTO system_metrics (timestamp, processed_count, auto_processed_count, error_count, pending_reviews_count) VALUES (?, ?, ?, ?, ?)",
+                (timestamp, processed_count, auto_processed, error_count, pending_reviews)
+            )
+            connection.commit()
+            self.logger.info(f"Initialized system metrics: processed={processed_count}, auto={auto_processed}, errors={error_count}, pending={pending_reviews}")
+            
         cursor.close()
         
     def close(self):
@@ -616,6 +673,83 @@ class DatabaseService:
         )
         
         self._get_connection().commit()
+        
+        # After updating metrics, try to update the CLI dashboard directly
+        # Don't use try/except since that might mask database commit errors
+        try:
+            # Import cli reference from main to trigger dashboard update
+            from main import cli
+            if cli is not None:
+                print(f"Database updated metrics. Notifying CLI: processed={processed_count}, auto={auto_processed_count}")
+                
+                # Try direct update of stats cards first (most reliable)
+                try:
+                    # Update processed count property
+                    cli.processed_count = processed_count
+                    cli.auto_processed = auto_processed_count
+                    cli.error_count = error_count
+                    
+                    # Direct UI update - find and update the dashboard cards
+                    processed_card = cli.query_one("#processed-card", Container)
+                    auto_card = cli.query_one("#auto-card", Container)
+                    pending_card = cli.query_one("#pending-card", Container)
+                    
+                    # Update each card's value label directly
+                    if processed_card:
+                        value_label = processed_card.query("Label.stats-value")
+                        if value_label and len(value_label) > 0:
+                            value_label[0].update(str(processed_count))
+                            print(f"Database directly updated processed card to {processed_count}")
+                            
+                    if auto_card:
+                        value_label = auto_card.query("Label.stats-value")
+                        if value_label and len(value_label) > 0:
+                            value_label[0].update(str(auto_processed_count))
+                            
+                    if pending_card:
+                        value_label = pending_card.query("Label.stats-value")
+                        if value_label and len(value_label) > 0:
+                            value_label[0].update(str(pending_reviews_count))
+                except Exception as e:
+                    print(f"Error during direct UI update: {str(e)}")
+                
+                # Update all UI components comprehensively
+                try:
+                    # First update dashboard completely
+                    if hasattr(cli, 'update_dashboard'):
+                        # Use a separate thread to avoid blocking
+                        import threading
+                        threading.Thread(target=lambda: cli.call_later(cli.update_dashboard), daemon=True).start()
+                    
+                    # Then update analytics components
+                    if hasattr(cli, 'refresh_analytics_safely'):
+                        threading.Thread(target=lambda: cli.call_later(cli.refresh_analytics_safely), daemon=True).start()
+                    
+                    # Also update specific analytics tables
+                    if hasattr(cli, 'update_intent_stats'):
+                        threading.Thread(target=lambda: cli.call_later(cli.update_intent_stats), daemon=True).start()
+                    
+                    if hasattr(cli, 'update_error_stats'):
+                        threading.Thread(target=lambda: cli.call_later(cli.update_error_stats), daemon=True).start()
+                    
+                    # Also use the action_refresh method as backup
+                    if hasattr(cli, 'action_refresh'):
+                        threading.Thread(target=lambda: cli.call_later(cli.action_refresh), daemon=True).start()
+                except Exception as refresh_e:
+                    print(f"Error scheduling UI updates: {refresh_e}")
+                    
+                # If all else fails, force the dashboard to check for changes on next poll
+                if hasattr(cli, 'last_db_update_time'):
+                    cli.last_db_update_time = 0  # Reset to force check
+                if hasattr(cli, 'last_analytics_refresh'):
+                    cli.last_analytics_refresh = 0  # Reset to force analytics check
+        except ImportError:
+            # CLI not available, which is fine
+            pass
+        except Exception as e:
+            # Log but don't re-raise so database operation completes
+            print(f"Warning: Error attempting to refresh CLI dashboard: {str(e)}")
+            
         return cursor.lastrowid
     
     def get_latest_metrics(self):
@@ -631,13 +765,72 @@ class DatabaseService:
         
         row = cursor.fetchone()
         if not row:
-            return {
-                "processed_count": 0,
-                "auto_processed_count": 0,
-                "error_count": 0,
-                "pending_reviews_count": 0,
-                "timestamp": datetime.now().isoformat()
-            }
+            # No metrics found - let's create initial metrics
+            timestamp = datetime.now().isoformat()
+            
+            # Count actual processed emails if possible
+            processed_count = 0
+            try:
+                cursor = self.execute_with_retry("SELECT COUNT(*) FROM email_processing WHERE status='processed'")
+                row = cursor.fetchone()
+                if row:
+                    processed_count = row[0]
+            except Exception as e:
+                self.logger.error(f"Error counting processed emails: {e}")
+            
+            # Count auto-processed emails
+            auto_processed = 0
+            try:
+                cursor = self.execute_with_retry("SELECT COUNT(*) FROM email_processing WHERE auto_processed=1")
+                row = cursor.fetchone()
+                if row:
+                    auto_processed = row[0]
+            except Exception as e:
+                self.logger.error(f"Error counting auto-processed emails: {e}")
+            
+            # Count errors
+            error_count = 0
+            try:
+                cursor = self.execute_with_retry("SELECT COUNT(*) FROM error_log")
+                row = cursor.fetchone()
+                if row:
+                    error_count = row[0]
+            except Exception as e:
+                self.logger.error(f"Error counting errors: {e}")
+            
+            # Count pending reviews
+            pending_reviews = 0
+            try:
+                cursor = self.execute_with_retry("SELECT COUNT(*) FROM reviews WHERE status='pending'")
+                row = cursor.fetchone()
+                if row:
+                    pending_reviews = row[0]
+            except Exception as e:
+                self.logger.error(f"Error counting pending reviews: {e}")
+            
+            # Insert initial metrics record
+            cursor = self.execute_with_retry(
+                "INSERT INTO system_metrics (timestamp, processed_count, auto_processed_count, error_count, pending_reviews_count) VALUES (?, ?, ?, ?, ?)",
+                (timestamp, processed_count, auto_processed, error_count, pending_reviews)
+            )
+            self._get_connection().commit()
+            self.logger.info(f"Created first-time metrics: processed={processed_count}, auto={auto_processed}, errors={error_count}, pending={pending_reviews}")
+            
+            # Now fetch the newly created record
+            cursor = self.execute_with_retry(
+                "SELECT * FROM system_metrics ORDER BY timestamp DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            
+            # If still no row (though unlikely), return defaults
+            if not row:
+                return {
+                    "processed_count": processed_count,
+                    "auto_processed_count": auto_processed,
+                    "error_count": error_count,
+                    "pending_reviews_count": pending_reviews,
+                    "timestamp": timestamp
+                }
             
         return dict(row)
     
@@ -814,6 +1007,26 @@ class DatabaseService:
 # Initialize the database service as a singleton
 db = DatabaseService()
 
+def ensure_metrics_exist():
+    """
+    Ensure that at least one metrics record exists in the database.
+    This is called during startup to prevent empty dashboard.
+    """
+    global db
+    if not db:
+        db = DatabaseService()
+    
+    # Check if any metrics exist
+    cursor = db.execute_with_retry("SELECT COUNT(*) FROM system_metrics")
+    count = cursor.fetchone()[0]
+    
+    if count == 0:
+        # Initialize with default values using the existing method
+        metrics = db.get_latest_metrics()
+        print(f"Initialized default metrics: {metrics}")
+    
+    return db
+
 def get_db():
     """
     Get the database service instance.
@@ -821,4 +1034,7 @@ def get_db():
     Returns:
         DatabaseService: The database service instance
     """
+    global db
+    if not db:
+        db = DatabaseService()
     return db
