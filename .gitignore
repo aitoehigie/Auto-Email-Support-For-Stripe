@@ -141,5 +141,7 @@ Desktop.ini
 logs/
 config.ini
 secrets.yaml
+*.db
+database/
 
 CLAUDE.md
